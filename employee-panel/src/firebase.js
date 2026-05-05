@@ -1,12 +1,11 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { getAuth, signOut } from 'firebase/auth';
 import { getAnalytics } from 'firebase/analytics';
 import { getMessaging, getToken, onMessage } from 'firebase/messaging';
 import { firebaseConfig } from '@shared/config/firebase';
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
 const analytics = typeof window !== 'undefined' && firebaseConfig.measurementId ? getAnalytics(app) : null;
 const messaging = typeof window !== 'undefined' ? getMessaging(app) : null;
 
@@ -27,16 +26,12 @@ const onMessageListener = (callback) => {
   onMessage(messaging, callback);
 };
 
-const signInWithGoogle = async () => {
+const logoutFromFirebase = async () => {
   try {
-    const result = await signInWithPopup(auth, googleProvider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    const token = await result.user.getIdToken();
-    return { user: result.user, token, credential };
+    await signOut(auth);
   } catch (error) {
-    console.error('Google sign-in error:', error);
-    throw error;
+    console.error('Firebase sign-out error:', error);
   }
 };
 
-export { auth, analytics, messaging, requestFirebaseToken, onMessageListener, signInWithGoogle };
+export { auth, analytics, messaging, requestFirebaseToken, onMessageListener, logoutFromFirebase };

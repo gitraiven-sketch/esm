@@ -13,6 +13,7 @@ import ChatPage from './pages/employee/ChatPage';
 import WorkReportsPage from './pages/employee/WorkReportsPage';
 import SettingsPage from './pages/employee/SettingsPage';
 import ProtectedRoute from './components/ProtectedRoute';
+import { logoutFromFirebase } from './firebase';
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('ems_employee_token'));
@@ -21,9 +22,10 @@ function App() {
     localStorage.setItem('ems_employee_token', value);
     setToken(value);
   };
-  const logout = () => {
+  const logout = async () => {
     localStorage.removeItem('ems_employee_token');
     setToken(null);
+    await logoutFromFirebase();
   };
   const auth = useMemo(() => ({ token, login, logout }), [token]);
 
