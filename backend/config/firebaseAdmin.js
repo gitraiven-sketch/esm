@@ -3,7 +3,22 @@ const admin = require('firebase-admin');
 const initializeFirebaseAdmin = () => {
   if (admin.apps.length === 0) {
     try {
-      // First try to load from environment variables (production)
+      // For development, try JSON file first
+      const fs = require('fs');
+      const path = require('path');
+      const keyPath = path.join(__dirname, '../../system-hr-fa2e8-firebase-adminsdk-fbsvc-9d9f2e6249.json');
+
+      if (fs.existsSync(keyPath)) {
+        const serviceAccount = require(keyPath);
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+          databaseURL: 'https://system-hr-fa2e8.firebaseio.com'
+        });
+        console.log('Firebase service account loaded from JSON file');
+        return;
+      }
+
+      // Fallback to environment variables (production)
       if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY) {
         let privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
@@ -42,40 +57,14 @@ const initializeFirebaseAdmin = () => {
 
         console.log('Firebase Admin initialized from environment variables');
       } else {
-        // Fallback to JSON file (development/local)
-        const fs = require('fs');
-        const path = require('path');
-        const keyPath = path.join(__dirname, '../../system-hr-fa2e8-firebase-adminsdk-fbsvc-9d9f2e6249.json');
-
-        if (fs.existsSync(keyPath)) {
-          const serviceAccount = require(keyPath);
-          admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount),
-            databaseURL: 'https://system-hr-fa2e8.firebaseio.com'
-          });
-          console.log('Firebase service account loaded from JSON file');
-        } else {
-          throw new Error('Firebase configuration not found. Please set environment variables or provide JSON file.');
-        }
+        console.warn('Firebase configuration not found. Running without Firebase Admin SDK.');
+        // Don't throw error - allow server to run without Firebase for development
       }
     } catch (error) {
-      console.error('Failed to initialize Firebase Admin:', error.message);
-      throw error;
+      console.warn('Failed to initialize Firebase Admin, continuing without Firebase:', error.message);
+      // Don't throw error - allow server to run without Firebase for development
     }
   }
 };
 
 module.exports = { initializeFirebaseAdmin };
-      console.log('Firebase Admin initialized');
-    } catch (error) {
-      console.error('Firebase Admin initialization failed:', error.message);
-    }
-  }
-};
-
-const getAuth = () => {
-  if (admin.apps.length === 0) return null;
-  return admin.auth();
-};
-
-module.exports = { initializeFirebaseAdmin, firebaseAdmin: admin, getAuth };
