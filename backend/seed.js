@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
-const connectDatabase = require('./config/db');
+const { connectDatabase } = require('./config/db');
 const User = require('./models/User');
 const Announcement = require('./models/Announcement');
 const Attendance = require('./models/Attendance');

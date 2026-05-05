@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { firebaseAdmin } = require('../config/firebaseAdmin');
+const { firebaseAdmin, getAuth } = require('../config/firebaseAdmin');
 const User = require('../models/User');
 
 const authMiddleware = async (req, res, next) => {
@@ -15,7 +15,9 @@ const authMiddleware = async (req, res, next) => {
       decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretjwtkey');
     } catch {
       try {
-        const firebaseToken = await firebaseAdmin.auth().verifyIdToken(token);
+        const auth = getAuth();
+        if (!auth) throw new Error('Firebase Admin not initialized');
+        const firebaseToken = await auth.verifyIdToken(token);
         decoded = { uid: firebaseToken.uid, email: firebaseToken.email };
       } catch (error) {
         return res.status(401).json({ message: 'Invalid token' });

@@ -1,11 +1,21 @@
 const bcrypt = require('bcryptjs');
-const { firebaseAdmin } = require('../config/firebaseAdmin');
+const { firebaseAdmin, getAuth } = require('../config/firebaseAdmin');
 const { generateToken } = require('../config/jwt');
 const User = require('../models/User');
 
 const register = async (req, res) => {
   try {
     const { firstName, lastName, email, password, role, department, jobTitle, jobDescription, joinedAt } = req.body;
+    
+    // Check MongoDB connection status first
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Registration failed: MongoDB not connected');
+      return res.status(503).json({ 
+        message: 'Database is currently unavailable. Please ensure your IP is whitelisted in MongoDB Atlas and try again.' 
+      });
+    }
+
     const existing = await User.findOne({ email });
     if (existing) {
       return res.status(400).json({ message: 'Email already registered' });
@@ -17,6 +27,33 @@ const register = async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     const isAdminRole = role === 'admin';
+
+    // Create or retrieve user in Firebase Auth
+    let firebaseUser;
+    const auth = getAuth();
+    if (auth) {
+      try {
+        firebaseUser = await auth.createUser({
+          email,
+          password,
+          displayName: `${firstName} ${lastName}`,
+        });
+      } catch (firebaseError) {
+        if (firebaseError.code === 'auth/email-already-exists') {
+          // If user exists in Firebase, try to get their UID
+          try {
+            firebaseUser = await auth.getUserByEmail(email);
+          } catch (getError) {
+            console.error('Error fetching existing Firebase user:', getError);
+          }
+        } else {
+          console.error('Firebase user creation error:', firebaseError);
+        }
+      }
+    } else {
+      console.warn('Firebase Admin not initialized. Skipping Firebase user creation.');
+    }
+
     const user = await User.create({
       firstName,
       lastName,
@@ -29,7 +66,8 @@ const register = async (req, res) => {
       joinedAt: joinedAt ? new Date(joinedAt) : Date.now(),
       signedContractUrl,
       signedContractFileName,
-      status: isAdminRole ? 'pending' : 'active'
+      status: isAdminRole ? 'pending' : 'active',
+      firebaseUid: firebaseUser?.uid
     });
 
     // If admin registration, don't auto-login (they need approval first)
@@ -44,7 +82,10 @@ const register = async (req, res) => {
     delete userData.password;
     res.json({ user: userData, token });
   } catch (error) {
-    console.error(error);
+    console.error('Registration error:', error);
+    if (error.name === 'MongooseServerSelectionError') {
+      return res.status(503).json({ message: 'Database connection issue. Please try again later.' });
+    }
     res.status(500).json({ message: 'Register failed' });
   }
 };
@@ -54,30 +95,49 @@ const login = async (req, res) => {
     const { email, password, firebaseIdToken } = req.body;
     let user;
 
-    if (firebaseIdToken) {
-      const decodedToken = await firebaseAdmin.auth().verifyIdToken(firebaseIdToken);
+    // Check MongoDB connection status first
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Login failed: MongoDB not connected');
+      return res.status(503).json({ 
+        message: 'Database is currently unavailable. Please ensure your IP is whitelisted in MongoDB Atlas and try again.' 
+      });
+    }
+
+    const auth = getAuth();
+    if (firebaseIdToken && auth) {
+      const decodedToken = await auth.verifyIdToken(firebaseIdToken);
       if (!decodedToken?.email) {
         return res.status(400).json({ message: 'Invalid Firebase token' });
       }
       user = await User.findOne({ email: decodedToken.email });
+      if (user && !user.firebaseUid) {
+        user.firebaseUid = decodedToken.uid;
+        await user.save();
+      }
+
       if (!user) {
-        // Auto-register Google users
+        // Auto-create user in MongoDB if they exist in Firebase but not in DB
         const fullName = decodedToken.name || decodedToken.email.split('@')[0];
         const [firstName, ...rest] = fullName.split(' ');
-        const lastName = rest.join(' ') || '';
-        const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-12), 10);
+        const lastName = rest.join(' ') || 'User';
+        
+        // We don't have the clear password here, but they are already authenticated by Firebase
+        // We set a random hash as a placeholder for traditional login fallback
+        const placeholderPassword = await bcrypt.hash(Math.random().toString(36).slice(-12), 10);
 
         user = await User.create({
           firstName,
           lastName,
           email: decodedToken.email,
-          password: randomPassword, // Random password for Google users
-          role: 'employee', // Default role, can be changed later by admin
+          password: placeholderPassword,
+          role: 'employee', // Default role
           department: 'General',
           jobTitle: 'Employee',
-          googleId: decodedToken.uid,
-          profilePicture: decodedToken.picture || null
+          firebaseUid: decodedToken.uid,
+          status: 'active' // Auto-activate since they are already in Firebase
         });
+        console.log(`Auto-created MongoDB user for existing Firebase account: ${decodedToken.email}`);
       }
     } else {
       // Traditional email/password login
@@ -89,6 +149,22 @@ const login = async (req, res) => {
       if (!user || !(await bcrypt.compare(password, user.password))) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
+
+      // If user is found but has no firebaseUid, try to find/link them
+      if (user && !user.firebaseUid && auth) {
+        try {
+          const firebaseUser = await auth.getUserByEmail(user.email);
+          user.firebaseUid = firebaseUser.uid;
+          await user.save();
+        } catch (firebaseError) {
+          // User might not exist in Firebase yet, which is fine for traditional login
+          console.log('User not found in Firebase during traditional login');
+        }
+      }
+    }
+
+    if (!user) {
+      return res.status(401).json({ message: 'User not found' });
     }
 
     if (user.status !== 'active') {
@@ -104,7 +180,10 @@ const login = async (req, res) => {
     delete userData.password;
     res.json({ user: userData, token });
   } catch (error) {
-    console.error(error);
+    console.error('Login error:', error);
+    if (error.name === 'MongooseServerSelectionError') {
+      return res.status(503).json({ message: 'Database connection issue. Please try again later.' });
+    }
     res.status(500).json({ message: 'Login failed' });
   }
 };
@@ -112,8 +191,22 @@ const login = async (req, res) => {
 const profile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('-password');
-    res.json(user);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Check for Firebase sync status
+    const identityStatus = {
+      isSyncedWithFirebase: !!user.firebaseUid,
+      provider: user.firebaseUid ? 'Firebase/Email' : 'Local'
+    };
+
+    res.json({
+      ...user.toObject(),
+      identityStatus
+    });
   } catch (error) {
+    console.error('Profile load error:', error);
     res.status(500).json({ message: 'Unable to load profile' });
   }
 };
